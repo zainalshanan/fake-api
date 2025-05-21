@@ -105,10 +105,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
-        '404':
-          description: User not found
         '400':
           description: Invalid input
+        '404':
+          description: User not found
+        '409':
+          description: Email already exists
     
     patch:
       summary: Partially update user
@@ -126,10 +128,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
-        '404':
-          description: User not found
         '400':
           description: Invalid input
+        '404':
+          description: User not found
+        '409':
+          description: Email already exists
     
     delete:
       summary: Delete user
@@ -137,6 +141,8 @@ paths:
       responses:
         '204':
           description: User deleted successfully
+        '400':
+          description: Invalid userId
         '404':
           description: User not found
 

@@ -1,0 +1,22 @@
+{
+  "example-api": {
+    "users": [
+      {}
+    ]
+  },
+  "users": [
+    {
+      "email": "test@example.com",
+      "firstName": "Test",
+      "lastName": "User"
+    },
+    {
+      "email": "test@example.com",
+      "firstName": "Test",
+      "lastName": "User"
+    },
+    {
+      "email": "bad"
+    }
+  ]
+}

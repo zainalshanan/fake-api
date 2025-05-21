@@ -10,6 +10,11 @@ A powerful tool that automatically generates mock API endpoints, fake data, and 
 - Support for multiple API specs in one server
 - Easy to extend and customize generated controllers
 - Built-in database for persistent data storage
+- **Supports custom controller logic:**
+  - Pagination (e.g., `GET /users?page=1&limit=10`)
+  - Field censoring (e.g., hide or mask sensitive fields)
+  - Forced errors for testing
+- **Comprehensive integration test script** for all endpoints and edge cases
 
 ## Installation
 
@@ -71,39 +76,45 @@ npm start -- --port 8080
 
 The generated controllers provide basic CRUD operations by default. You can customize them by editing the files in the `generated/<api-name>/controllers` directory.
 
-Example controller:
+**Examples of custom logic you can add:**
+- Pagination: Use `req.query.page` and `req.query.limit` to paginate results.
+- Field censoring: Remove or mask fields (e.g., `user.email = '***'`).
+- Forced errors: Throw or return errors for testing error handling.
+
+Example controller with custom logic:
 ```typescript
 export const getUsers = async (req: Request, res: Response) => {
-  const data = await db.get(req.path);
-  res.json(data);
+  let data = await db.get(req.path);
+  // Censor email
+  data = data.map((user: any) => ({ ...user, email: '***' }));
+  // Pagination
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || data.length;
+  const start = (page - 1) * limit;
+  const paginated = data.slice(start, start + limit);
+  res.json(paginated);
 };
 
-export const createUser = async (req: Request, res: Response) => {
-  const data = await db.create(req.path, req.body);
-  res.status(201).json(data);
+export const errorUsers = async (req: Request, res: Response) => {
+  res.status(500).json({ error: 'Forced error for testing' });
 };
+```
+
+## Integration Testing
+
+A comprehensive integration test script (`test-app.cjs`) is included. It:
+- Generates routes/controllers and mock data
+- Starts the server
+- Tests all endpoints and edge cases (CRUD, invalid, duplicate, not found)
+- Tests custom logic (pagination, censoring, forced errors)
+- Logs results for each test
+
+To run the integration test:
+```bash
+node test-app.cjs
 ```
 
 ## Testing
 
 Run the test suite:
-```bash
-npm test
 ```
-
-Watch mode:
-```bash
-npm run watch:test
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the ISC License. 

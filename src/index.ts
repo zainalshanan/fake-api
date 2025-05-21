@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import * as path from 'path';
-import { Generator } from './generator';
-import { MockGenerator } from './mock';
-import { Server } from './server';
+import { Generator } from './generator.js';
+import { MockGenerator } from './mock.js';
+import { Server } from './server.js';
 
 const program = new Command();
 

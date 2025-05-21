@@ -4,10 +4,10 @@ import * as path from 'path';
 import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
 import { faker } from '@faker-js/faker';
-import { CLIOptions } from './types';
-import { Logger } from './utils/logger';
-import { ensureDirs } from './utils/file';
-import { getSwaggerFiles } from './utils/swagger';  
+import type { CLIOptions } from './types.js';
+import { Logger } from './utils/logger.js';
+import { ensureDirs } from './utils/file.js';
+import { getSwaggerFiles } from './utils/swagger.js';  
 
 export class MockGenerator {
   private specDir: string;

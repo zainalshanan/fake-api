@@ -2,11 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
-import { RouteConfig, ControllerConfig } from './types';
-import { Logger } from "./utils/logger";
-import { CLIOptions } from "./types";
-import { getSwaggerFiles } from "./utils/swagger";
-import { ensureDirs } from "./utils/file";
+import type { RouteConfig, ControllerConfig } from './types.js';
 
 export class Generator {
   private specDir: string;
@@ -84,8 +80,7 @@ export class Generator {
     
     if (action.startsWith('{') && action.endsWith('}')) {
       // Path has an ID parameter
-      const paramName = action.slice(1, -1);
-      return `${method}${resource}By${paramName.charAt(0).toUpperCase() + paramName.slice(1)}`;
+      return `${method}${resource}ById`;
     }
     
     return `${method}${resource}${action ? action.charAt(0).toUpperCase() + action.slice(1) : ''}`;
@@ -93,7 +88,7 @@ export class Generator {
 
   private async generateRouteFile(routes: RouteConfig[], specName: string): Promise<void> {
     const routeContent = `import express from 'express';
-import * as controllers from '../controllers';
+import * as controllers from '../controllers/index.js';
 
 const router = express.Router();
 
@@ -110,14 +105,10 @@ export default router;
   }
 
   private async generateControllers(controllers: ControllerConfig[], specName: string): Promise<void> {
-    const controllerContent = `import { Request, Response } from 'express';
-import db from '../../db';
+    const controllerContent = `import type { Request, Response } from 'express';
+import db from '../../../src/db.js';
 
 ${controllers.map(controller => this.generateControllerFunction(controller)).join('\n\n')}
-
-export {
-  ${controllers.map(c => c.operationId).join(',\n  ')}
-};
 `;
 
     fs.writeFileSync(
