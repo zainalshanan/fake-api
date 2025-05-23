@@ -45,8 +45,8 @@ export class Server {
     const specs = fs.readdirSync(this.specDir)
       .filter(file => file.endsWith('.yaml') || file.endsWith('.json'));
 
-    // Use dist/generated in production, generated in dev
-    const generatedBase = process.env.NODE_ENV === 'production' ? 'dist/generated' : 'generated';
+    // Always use dist/generated for generated files
+    const generatedBase = 'dist/generated';
 
     for (const spec of specs) {
       const api = await SwaggerParser.parse(path.join(this.specDir, spec)) as OpenAPIV3.Document;

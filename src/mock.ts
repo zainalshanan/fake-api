@@ -27,8 +27,8 @@ export class MockGenerator {
     for (const spec of specs) {
       const api = await SwaggerParser.parse(path.join(this.specDir, spec)) as OpenAPIV3.Document;
       const specName = path.basename(spec, path.extname(spec));
-      
-      mockData[specName] = await this.generateMockData(api);
+      const schemas = (api.components && api.components.schemas) ? api.components.schemas : {};
+      mockData[specName] = await this.generateMockData(api, schemas);
     }
 
     fs.writeFileSync(
@@ -37,45 +37,57 @@ export class MockGenerator {
     );
   }
 
-  private async generateMockData(api: OpenAPIV3.Document): Promise<Record<string, any[]>> {
+  private async generateMockData(api: OpenAPIV3.Document, schemas: Record<string, OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject>): Promise<Record<string, any[]>> {
     const mockData: Record<string, any[]> = {};
+    const usedResources = new Set<string>();
 
-    for (const [path, pathItem] of Object.entries(api.paths || {})) {
+    // First, generate mock data for each schema in components.schemas
+    for (const [resourceName, schema] of Object.entries(schemas)) {
+      // Only generate for object schemas
+      const resolvedSchema = this.resolveSchema(schema, schemas);
+      if (resolvedSchema && resolvedSchema.type === 'object') {
+        mockData[resourceName] = [];
+        for (let i = 0; i < 5; i++) {
+          const mockItem = this.generateMockItem(resolvedSchema, schemas);
+          if (!mockData[resourceName].find(item => item.id === mockItem.id)) {
+            mockData[resourceName].push(mockItem);
+          }
+        }
+        usedResources.add(resourceName);
+      }
+    }
+
+    // Then, for each path, if it has a POST with a requestBody schema, generate mock data for that resource path if not already done
+    for (const [pathStr, pathItem] of Object.entries(api.paths || {})) {
       if (!pathItem) continue;
-
-      const resourcePath = this.getResourcePath(path);
+      const resourcePath = this.getResourcePath(pathStr);
+      if (!resourcePath) continue;
       if (!mockData[resourcePath]) {
         mockData[resourcePath] = [];
       }
-
       for (const [method, operation] of Object.entries(pathItem)) {
         if (method === 'parameters' || !operation) continue;
-
         const op = operation as OpenAPIV3.OperationObject;
         if (method.toLowerCase() === 'post' && op.requestBody) {
           const schema = this.getRequestBodySchema(op.requestBody as OpenAPIV3.RequestBodyObject);
           if (schema) {
-            // Generate 5 mock items for each resource
+            const resolvedSchema = this.resolveSchema(schema, schemas);
             for (let i = 0; i < 5; i++) {
-              const mockItem = this.generateMockItem(schema);
+              const mockItem = this.generateMockItem(resolvedSchema, schemas);
               if (!mockData[resourcePath].find(item => item.id === mockItem.id)) {
                 mockData[resourcePath].push(mockItem);
               }
             }
+            usedResources.add(resourcePath);
           }
         }
       }
+    }
 
-      // If no mock data was generated from POST schema, create some basic data
-      if (mockData[resourcePath].length === 0) {
-        for (let i = 0; i < 5; i++) {
-          mockData[resourcePath].push({
-            id: faker.datatype.uuid(),
-            name: faker.commerce.productName(),
-            description: faker.commerce.productDescription(),
-            createdAt: faker.date.past().toISOString()
-          });
-        }
+    // Remove any empty collections
+    for (const key of Object.keys(mockData)) {
+      if (!mockData[key] || mockData[key].length === 0) {
+        delete mockData[key];
       }
     }
 
@@ -87,71 +99,78 @@ export class MockGenerator {
     return segments[0];
   }
 
-  private getRequestBodySchema(requestBody: OpenAPIV3.RequestBodyObject): OpenAPIV3.SchemaObject | null {
+  private getRequestBodySchema(requestBody: OpenAPIV3.RequestBodyObject): OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject | null {
     const content = requestBody.content;
     if (!content) return null;
-
     const jsonContent = content['application/json'];
     if (!jsonContent || !jsonContent.schema) return null;
-
-    return jsonContent.schema as OpenAPIV3.SchemaObject;
+    return jsonContent.schema as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject;
   }
 
-  private generateMockItem(schema: OpenAPIV3.SchemaObject): any {
-    if (schema.type === 'object' && schema.properties) {
-      const result: Record<string, any> = {};
-      
-      for (const [prop, propSchema] of Object.entries(schema.properties)) {
-        result[prop] = this.generateMockValue(propSchema as OpenAPIV3.SchemaObject);
+  private resolveSchema(schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject, schemas: Record<string, OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject>): OpenAPIV3.SchemaObject {
+    if ('$ref' in schema) {
+      // $ref is of the form '#/components/schemas/ResourceName'
+      const ref = schema.$ref;
+      const match = ref.match(/^#\/components\/schemas\/(.+)$/);
+      if (match) {
+        const refName = match[1];
+        const resolved = schemas[refName];
+        if (!resolved) throw new Error(`Schema $ref not found: ${ref}`);
+        return this.resolveSchema(resolved, schemas);
       }
+      throw new Error(`Unsupported $ref format: ${ref}`);
+    }
+    return schema;
+  }
 
+  private generateMockItem(schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject, schemas: Record<string, OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject>): any {
+    const resolvedSchema = this.resolveSchema(schema, schemas);
+    if (resolvedSchema.type === 'object' && resolvedSchema.properties) {
+      const result: Record<string, any> = {};
+      for (const [prop, propSchema] of Object.entries(resolvedSchema.properties)) {
+        result[prop] = this.generateMockValue(propSchema as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject, schemas);
+      }
       // Ensure ID exists
       if (!result.id) {
-        result.id = faker.datatype.uuid();
+        result.id = faker.string.uuid();
       }
-
       return result;
     }
-
     return {};
   }
 
-  private generateMockValue(schema: OpenAPIV3.SchemaObject): any {
-    switch (schema.type) {
+  private generateMockValue(schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject, schemas: Record<string, OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject>): any {
+    const resolvedSchema = this.resolveSchema(schema, schemas);
+    switch (resolvedSchema.type) {
       case 'string':
-        if (schema.format === 'date-time') {
+        if (resolvedSchema.format === 'date-time') {
           return faker.date.recent().toISOString();
-        } else if (schema.format === 'email') {
+        } else if (resolvedSchema.format === 'email') {
           return faker.internet.email();
-        } else if (schema.format === 'uri') {
+        } else if (resolvedSchema.format === 'uri') {
           return faker.internet.url();
-        } else if (schema.enum) {
-          return faker.helpers.arrayElement(schema.enum);
+        } else if (resolvedSchema.enum) {
+          return faker.helpers.arrayElement(resolvedSchema.enum);
         }
         return faker.lorem.word();
-
       case 'number':
       case 'integer':
-        return faker.datatype.number({ min: schema.minimum || 0, max: schema.maximum || 1000 });
-
+        return faker.number.int({ min: resolvedSchema.minimum || 0, max: resolvedSchema.maximum || 1000 });
       case 'boolean':
         return faker.datatype.boolean();
-
       case 'array':
-        if (schema.items) {
-          const length = faker.datatype.number({ min: 1, max: 5 });
-          return Array.from({ length }, () => 
-            this.generateMockValue(schema.items as OpenAPIV3.SchemaObject)
+        if (resolvedSchema.items) {
+          const length = faker.number.int({ min: 1, max: 5 });
+          return Array.from({ length }, () =>
+            this.generateMockValue(resolvedSchema.items as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject, schemas)
           );
         }
         return [];
-
       case 'object':
-        if (schema.properties) {
-          return this.generateMockItem(schema);
+        if (resolvedSchema.properties) {
+          return this.generateMockItem(resolvedSchema, schemas);
         }
         return {};
-
       default:
         return null;
     }
