@@ -118,3 +118,18 @@ node test-app.cjs
 
 Run the test suite:
 ```
+
+## Limitations & Developer Responsibilities
+
+- **Strictly Generic:** The generator is designed to work with any valid Swagger/OpenAPI spec and does not contain custom logic for unique or non-standard specs.
+- **Basic CRUD Only:** Only basic CRUD endpoints are auto-generated. The generator maps collection endpoints (e.g., `/posts`) to the main resource (e.g., `Post`) using only the top-level array or object schema. Nested properties are never used for main resource mapping.
+- **Advanced Logic Not Included:** Features like pagination, filtering, sorting, field censoring, authentication, and nested resource handling are **not** auto-generated. You must implement these in the generated controller files as needed.
+- **Inline Schemas:** If your spec uses inline schemas, the generator will synthesize a schema key based on the resource name. Ensure your schemas are consistent and include required fields (e.g., `id`).
+- **ID Handling:** The generator expects resources to have an `id` field for item endpoints. If your schema does not include an `id`, you may need to adjust the generated code or your spec.
+- **Mock Data:** Mock data is generated based on the top-level schema for each resource. Relationships (e.g., comments inside posts) are not automatically linked unless defined in the schema.
+
+## Troubleshooting
+
+- **404 on GET by ID:** Ensure your schema includes an `id` property and that mock data is generated with unique ids.
+- **Empty List Responses:** If the generated mock data is empty, check your schema definitions for required fields and types.
+- **Unexpected Resource Mapping:** The generator only uses the top-level array or object schema for mapping. If a collection endpoint is mapped to the wrong resource, check your spec for nested or ambiguous schemas.
