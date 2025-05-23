@@ -1,0 +1,286 @@
+openapi: 3.0.0
+info:
+  title: Inventory API
+  version: 1.0.0
+  description: An inventory management API with products, categories, and stock levels
+
+paths:
+  /products:
+    get:
+      summary: List all products
+      operationId: getProducts
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: inStock
+          in: query
+          schema:
+            type: boolean
+        - name: minPrice
+          in: query
+          schema:
+            type: number
+        - name: maxPrice
+          in: query
+          schema:
+            type: number
+      responses:
+        '200':
+          description: List of products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    price:
+                      type: number
+                      minimum: 0
+                    category:
+                      type: string
+                    stockLevel:
+                      type: integer
+                      minimum: 0
+                    attributes:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    images:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          url:
+                            type: string
+                            format: uri
+                          type:
+                            type: string
+                            enum: [thumbnail, full, detail]
+                    status:
+                      type: string
+                      enum: [active, discontinued, outOfStock]
+                  required:
+                    - id
+                    - name
+                    - price
+                    - category
+                    - stockLevel
+    post:
+      summary: Create a new product
+      operationId: createProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                price:
+                  type: number
+                  minimum: 0
+                category:
+                  type: string
+                stockLevel:
+                  type: integer
+                  minimum: 0
+                attributes:
+                  type: object
+                  additionalProperties:
+                    type: string
+                images:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      type:
+                        type: string
+                        enum: [thumbnail, full, detail]
+              required:
+                - name
+                - price
+                - category
+                - stockLevel
+      responses:
+        '201':
+          description: Created product
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  description:
+                    type: string
+                  price:
+                    type: number
+                  category:
+                    type: string
+                  stockLevel:
+                    type: integer
+                  createdAt:
+                    type: string
+                    format: date-time
+
+  /products/{productId}:
+    parameters:
+      - name: productId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get a product by ID
+      operationId: getProductById
+      responses:
+        '200':
+          description: Product details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  description:
+                    type: string
+                  price:
+                    type: number
+                  category:
+                    type: string
+                  stockLevel:
+                    type: integer
+                  attributes:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  images:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        url:
+                          type: string
+                          format: uri
+                        type:
+                          type: string
+                          enum: [thumbnail, full, detail]
+                required:
+                  - id
+                  - name
+                  - price
+                  - category
+                  - stockLevel
+
+  /products/{productId}/stock:
+    parameters:
+      - name: productId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get product stock level
+      operationId: getProductStock
+      responses:
+        '200':
+          description: Product stock level
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product/properties/stock'
+    put:
+      summary: Update product stock level
+      operationId: updateProductStock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Product/properties/stock'
+      responses:
+        '200':
+          description: Updated stock level
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product/properties/stock'
+
+components:
+  schemas:
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          minimum: 0
+        category:
+          type: string
+        stock:
+          type: object
+          properties:
+            stockLevel:
+              type: integer
+              minimum: 0
+            lastUpdated:
+              type: string
+              format: date-time
+          required:
+            - stockLevel
+            - lastUpdated
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                format: uri
+              type:
+                type: string
+                enum: [thumbnail, full, detail]
+        status:
+          type: string
+          enum: [active, discontinued, outOfStock]
+      required:
+        - id
+        - name
+        - price
+        - category
+        - stock 

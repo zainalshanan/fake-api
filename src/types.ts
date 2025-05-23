@@ -21,6 +21,7 @@ export interface ControllerConfig {
   parameters: OpenAPIV3.ParameterObject[];
   requestBody?: OpenAPIV3.RequestBodyObject;
   responses: OpenAPIV3.ResponsesObject;
+  path?: string;
 }
 
 export interface MockConfig {

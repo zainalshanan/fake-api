@@ -2,13 +2,42 @@
 import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { OpenAPIV3_1 } from 'openapi-types';
 import { OpenAPIV3 } from 'openapi-types';
 import SwaggerParser from '@apidevtools/swagger-parser';
-import * as OpenApiValidator from 'express-openapi-validator';
+import { OpenApiValidator } from 'openapi-data-validator';
+import * as jsYaml from 'js-yaml';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import type { Server as HttpServer } from 'http';
+import { Logger } from './utils/logger.js';
+import { findOpenApiPath, castQueryToString, castHeadersToString } from './utils/openapi.js';
+import { getNestedValue, setNestedValue, findItemById } from './utils/db.js';
 
+/**
+ * Extract path parameters from URL based on OpenAPI path template.
+ * @param requestPath - Express request path
+ * @param openapiPath - OpenAPI path template
+ * @returns Record of path parameters
+ */
+function extractPathParams(requestPath: string, openapiPath: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  const requestParts = requestPath.split('/');
+  const templateParts = openapiPath.split('/');
+
+  templateParts.forEach((part, i) => {
+    if (part.startsWith('{') && part.endsWith('}')) {
+      const paramName = part.slice(1, -1);
+      params[paramName] = requestParts[i];
+    }
+  });
+
+  return params;
+}
+
+/**
+ * Server class to initialize and run the Express API server with OpenAPI validation and dynamic route loading.
+ */
 export class Server {
   public app: express.Application;
   private specDir: string;
@@ -25,6 +54,10 @@ export class Server {
     this.db = new Low(dbFile, {});
   }
 
+  /**
+   * Start the server and listen on the configured port.
+   * @returns {Promise<HttpServer>} The running HTTP server instance.
+   */
   async start(): Promise<HttpServer> {
     await this.db.read();
     
@@ -32,56 +65,116 @@ export class Server {
     await this.setupRoutes();
     
     return this.app.listen(this.port, () => {
-      console.log(`Server is running on http://localhost:${this.port}`);
+      Logger.success(`Server is running on http://localhost:${this.port}`);
     });
   }
 
+  /**
+   * Setup Express middleware for JSON and URL-encoded parsing.
+   */
   private setupMiddleware(): void {
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: true }));
   }
 
+  /**
+   * Dynamically load OpenAPI specs, set up validation, and mount generated routes.
+   */
   private async setupRoutes(): Promise<void> {
     const specs = fs.readdirSync(this.specDir)
       .filter(file => file.endsWith('.yaml') || file.endsWith('.json'));
 
-    // Always use dist/generated for generated files
-    const generatedBase = 'dist/generated';
-
     for (const spec of specs) {
+      Logger.info(`Loading spec: ${spec}`);
       const api = await SwaggerParser.parse(path.join(this.specDir, spec)) as OpenAPIV3.Document;
       const specName = path.basename(spec, path.extname(spec));
+      Logger.info(`Mounting routes for: /api/${specName}`);
 
       // Patch for OpenAPI 3.1 compatibility: ensure webhooks exists only for 3.1.x
       if (api.openapi && api.openapi.startsWith('3.1') && !('webhooks' in api)) {
         (api as any).webhooks = {};
       }
 
-      // Setup OpenAPI validation
-      this.app.use(
-        OpenApiValidator.middleware({
-          apiSpec: api as any,
-          validateRequests: true,
-          validateResponses: true
-        })
+      // Setup OpenAPI validation using openapi-data-validator
+      Logger.info(`Enabling OpenAPI data validator for: ${spec}`);
+      const specPath = path.join(this.specDir, spec);
+      const rawSpec = jsYaml.load(fs.readFileSync(specPath, 'utf8')) as any;
+      Object.keys(rawSpec.paths).forEach(
+        (k) => rawSpec.paths[k] === undefined && delete rawSpec.paths[k]
       );
+      const apiSpec = rawSpec as any;
+      const openApiValidator = new OpenApiValidator({ apiSpec });
+      const validator = openApiValidator.createValidator();
+      Logger.debug('OpenAPI paths: ' + JSON.stringify(Object.keys(apiSpec.paths || {})));
 
       // Load routes
-      const routePath = path.join(generatedBase, specName, 'routes');
+      const routePath = path.join(process.cwd(), 'dist', 'generated', specName, 'routes');
       if (fs.existsSync(routePath)) {
         try {
+          Logger.info(`Importing route module: ${routePath}/index.js`);
           const routeModule = await import(`file://${path.resolve(routePath, 'index.js')}`);
           const router = routeModule.default;
-          this.app.use(`/api/${specName}`, router);
+          // BEGIN PATCH: strip base path before the validator so that
+          // the OpenAPI validator sees the exact paths declared in the spec
+          const basePath = `/api/${specName}`;
+          const stripBasePath: express.RequestHandler = (req, _res, next) => {
+            if (req.originalUrl.startsWith(basePath)) {
+              const stripped = req.originalUrl.slice(basePath.length) || '/';
+              Logger.debug(`[StripBasePath] originalUrl: ${req.originalUrl} -> ${stripped}`);
+              // mutate both properties the validator uses
+              (req as any).originalUrl = stripped;
+              req.url = stripped;
+            }
+            next();
+          };
+          // END PATCH
+          // Mount validator and router at the same prefix
+          this.app.use(`/api/${specName}`,
+            (req: express.Request, res: express.Response, next: express.NextFunction) => {
+              Logger.info(`[Validator] Incoming request: ${req.method} ${req.originalUrl}`);
+              next();
+            },
+            stripBasePath,
+            async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+              try {
+                const openapiPath = findOpenApiPath(req.path, apiSpec.paths);
+                Logger.debug(`[OpenAPI Validator] Validating: method=${req.method}, path=${openapiPath}`);
+                
+                // Extract path parameters
+                const pathParams = extractPathParams(req.path, openapiPath);
+                Logger.debug(`[OpenAPI Validator] Path params:`, pathParams);
+
+                await validator({
+                  method: req.method,
+                  route: openapiPath,
+                  query: castQueryToString(req.query),
+                  headers: castHeadersToString(req.headers),
+                  path: pathParams,
+                  body: req.body,
+                });
+                next();
+              } catch (err: any) {
+                Logger.error('OpenAPI Data Validator Error: ' + err);
+                res.status(400).json({ error: err.message, details: err.errors });
+              }
+            },
+            (req: express.Request, res: express.Response, next: express.NextFunction) => {
+              Logger.debug(`[Router] req.url: ${req.url}, req.originalUrl: ${req.originalUrl}`);
+              next();
+            },
+            router
+          );
         } catch (error) {
-          console.error(`Error loading routes from ${routePath}:`, error);
+          Logger.error(`Error loading routes from ${routePath}: ${error}`);
         }
+      } else {
+        Logger.warn(`Route path does not exist: ${routePath}`);
       }
     }
 
-    // Error handling
+    // Error handling middleware for OpenAPI validation errors
     this.app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-      // Format error
+      Logger.error(`[ERROR HANDLER] path: ${req.path}, method: ${req.method}, error: ${err}`);
       res.status(err.status || 500).json({
         message: err.message,
         errors: err.errors
@@ -90,6 +183,9 @@ export class Server {
   }
 }
 
+/**
+ * Database class for simple JSON file-based data access, supporting CRUD operations.
+ */
 export class Database {
   private data: any;
   private dbPath: string;
@@ -99,127 +195,76 @@ export class Database {
     this.data = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
   }
 
+  /**
+   * Get data from the database by path (e.g., 'users/123').
+   * @param {string} path - The path to the resource.
+   * @returns {Promise<any>} The found data or null if not found.
+   */
   async get(path: string): Promise<any> {
-    const segments = path.split('/').filter(Boolean);
-    let current = this.data;
-    
-    for (const segment of segments) {
-      if (current === undefined || current === null) {
-        return null;
-      }
-      // If segment is a number, find item by ID
-      if (Array.isArray(current) && !isNaN(parseInt(segment))) { 
-        current = current.find(item => item.id === segment);
-      } else {
-        current = current[segment];
-      }
-    }
-    // If current is undefined after iterating (path not found), return null
-    return current === undefined ? null : current;
+    return getNestedValue(this.data, path);
   }
 
+  /**
+   * Create a new resource in the database at the given path.
+   * @param {string} path - The path to the collection.
+   * @param {any} data - The data to insert.
+   * @returns {Promise<any>} The created data.
+   */
   async create(path: string, data: any): Promise<any> {
-    const segments = path.split('/').filter(Boolean);
-    let current = this.data;
-    
-    for (let i = 0; i < segments.length - 1; i++) {
-      const segment = segments[i];
-      if (current[segment] === undefined) {
-        current[segment] = {};
-      }
-      current = current[segment];
-    }
-    
-    const lastSegment = segments[segments.length - 1];
-    if (!Array.isArray(current[lastSegment])) {
-      current[lastSegment] = [];
-    }
-    
-    current[lastSegment].push(data);
+    const result = setNestedValue(this.data, path, data);
     await this.save();
-    return data;
+    return result;
   }
 
+  /**
+   * Update a resource in the database at the given path.
+   * @param {string} path - The path to the resource (e.g., 'users/123').
+   * @param {any} data - The new data to replace the resource.
+   * @returns {Promise<any>} The updated data or null if not found.
+   */
   async update(path: string, data: any): Promise<any> {
-    const segments = path.split('/').filter(Boolean);
-    if (segments.length < 2) { // Path must be like /collection/id
-      return null;
-    }
-
-    const itemId = segments[segments.length - 1];
-    const collectionPathSegments = segments.slice(0, -1);
-
-    let collection = this.data;
-    for (const segment of collectionPathSegments) {
-      if (collection[segment] === undefined || !Array.isArray(collection[segment])) {
-        return null; // Collection not found or not an array
-      }
-      collection = collection[segment];
-    }
+    const id = path.split('/').pop() || '';
+    const [collection, index] = findItemById(this.data, path, id);
+    if (!collection || index === -1) return null;
     
-    const index = collection.findIndex((item: any) => item.id === itemId);
-    if (index === -1) {
-      return null; // Item not found
-    }
-    
-    collection[index] = data; // Update the item with the new data object
+    collection[index] = data;
     await this.save();
     return collection[index];
   }
 
+  /**
+   * Patch (partially update) a resource in the database at the given path.
+   * @param {string} path - The path to the resource (e.g., 'users/123').
+   * @param {any} data - The partial data to update.
+   * @returns {Promise<any>} The patched data or null if not found.
+   */
   async patch(path: string, data: any): Promise<any> {
-    const segments = path.split('/').filter(Boolean);
-    if (segments.length < 2) { // Path must be like /collection/id
-      return null;
-    }
-
-    const itemId = segments[segments.length - 1];
-    const collectionPathSegments = segments.slice(0, -1);
-
-    let collection = this.data;
-    for (const segment of collectionPathSegments) {
-      if (collection[segment] === undefined || !Array.isArray(collection[segment])) {
-        return null; // Collection not found or not an array
-      }
-      collection = collection[segment];
-    }
-    
-    // Find item by itemId from the path, not data.id from payload
-    const index = collection.findIndex((item: any) => item.id === itemId);
-    if (index === -1) {
-      return null; // Item not found
-    }
+    const id = path.split('/').pop() || '';
+    const [collection, index] = findItemById(this.data, path, id);
+    if (!collection || index === -1) return null;
     
     collection[index] = { ...collection[index], ...data };
     await this.save();
     return collection[index];
   }
 
+  /**
+   * Delete a resource from the database at the given path.
+   * @param {string} path - The path to the resource (e.g., 'users/123').
+   */
   async delete(path: string): Promise<void> {
-    const segments = path.split('/').filter(Boolean);
-    if (segments.length < 2) { // Path must be like /collection/id
-      return;
-    }
-
-    const itemId = segments[segments.length - 1]; // Keep as string
-    const collectionPathSegments = segments.slice(0, -1);
-
-    let collection = this.data;
-    for (const segment of collectionPathSegments) {
-      if (collection[segment] === undefined || !Array.isArray(collection[segment])) {
-        return; // Collection not found or not an array
-      }
-      collection = collection[segment];
-    }
-    
-    const index = collection.findIndex((item: any) => item.id === itemId); // Compare string IDs
-    
-    if (index !== -1) {
+    const id = path.split('/').pop() || '';
+    const [collection, index] = findItemById(this.data, path, id);
+    if (collection && index !== -1) {
       collection.splice(index, 1);
       await this.save();
     }
   }
 
+  /**
+   * Save the current state of the database to disk.
+   * @private
+   */
   private async save(): Promise<void> {
     await fs.promises.writeFile(this.dbPath, JSON.stringify(this.data, null, 2));
   }

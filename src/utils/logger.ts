@@ -17,8 +17,12 @@ export class Logger {
         console.log(chalk.red('Error: ' + message));
     }
 
-    static debug(message: string) {
-        console.log(chalk.gray('Debug: ' + message));
+    static debug(message: string, metadata?: Record<string, any>) {
+        if (metadata) {
+            console.log(chalk.gray('Debug: ' + message), chalk.gray(JSON.stringify(metadata, null, 2)));
+        } else {
+            console.log(chalk.gray('Debug: ' + message));
+        }
     }
 
     // log a table of data

@@ -1,0 +1,89 @@
+openapi: 3.0.0
+info:
+  title: Example API
+  description: A sample API for testing mock generation
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /users:
+    get:
+      summary: Get all users
+      description: Returns a list of users
+      operationId: getUsers
+      parameters:
+        - name: role
+          in: query
+          description: Filter users by role
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+  /users/{id}:
+    get:
+      summary: Get user by ID
+      description: Returns a single user by ID
+      operationId: getUserById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user, guest]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - firstName
+        - lastName
+        - email
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
