@@ -1,6 +1,9 @@
-import * as fs from "fs";
+import { pathExists, readDir } from "./file.js";
 
 export function getSwaggerFiles(specDir: string): string[] {
-    if (!fs.existsSync(specDir)) return [];
-    return fs.readdirSync(specDir).filter(file => file.endsWith('.yaml') || file.endsWith('.yml') || file.endsWith('.json'));
+  if (!pathExists(specDir)) return [];
+  return readDir(specDir).filter(
+    (file) =>
+      file.endsWith(".yaml") || file.endsWith(".yml") || file.endsWith(".json")
+  );
 }
